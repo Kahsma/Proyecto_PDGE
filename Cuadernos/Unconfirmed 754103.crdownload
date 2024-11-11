@@ -1,0 +1,903 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "6f2eae33-49c2-418e-9a97-4354fa32d6b4",
+   "metadata": {},
+   "source": [
+    "%md\n",
+    "## PONTIFICIA UNIVERSIDAD JAVERIANA ##\n",
+    "\n",
+    "Materia: Procesamieno de datos a gran escala\n",
+    "\n",
+    "Limpieza de datos Nivel educativo por municipio"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "d98c8242-cc11-441c-be02-406b03d78e89",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import findspark\n",
+    "findspark.init()\n",
+    "\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import seaborn as sns\n",
+    "import matplotlib as plt\n",
+    "%matplotlib inline\n",
+    "from matplotlib import rcParams\n",
+    "import squarify\n",
+    "from sklearn.metrics import roc_curve, auc\n",
+    "from pyspark.sql.window import Window\n",
+    "from pyspark.sql.functions import row_number, col\n",
+    "\n",
+    "#Biblioteca PySpark\n",
+    "import warnings\n",
+    "import pyspark\n",
+    "from pyspark.context import SparkContext\n",
+    "from pyspark.sql import SparkSession\n",
+    "\n",
+    "from pyspark.sql import SQLContext\n",
+    "from pyspark.sql.types import *\n",
+    "from pyspark.sql.functions import input_file_name, mean, col, split, regexp_extract, when, lit, isnan, count, udf\n",
+    "from pyspark import SparkFiles\n",
+    "from pyspark.sql.types import *\n",
+    "from pyspark.sql.functions import max, min\n",
+    "#Bioblioteca ML para PySpark\n",
+    "from pyspark.ml import Pipeline\n",
+    "from pyspark.sql.functions import col, sum\n",
+    "#Importar el SO\n",
+    "from time import time\n",
+    "from pyspark.conf import SparkConf\n",
+    "import os"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "50b99249-5be3-47a5-80e4-dbb2e82025e8",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Setting default log level to \"WARN\".\n",
+      "To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).\n",
+      "24/11/11 15:29:37 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable\n",
+      "24/11/11 15:29:37 WARN SparkConf: Note that spark.local.dir will be overridden by the value set by the cluster manager (via SPARK_LOCAL_DIRS in mesos/standalone/kubernetes and LOCAL_DIRS in YARN).\n"
+     ]
+    },
+    {
+     "data": {
+      "text/html": [
+       "\n",
+       "            <div>\n",
+       "                <p><b>SparkSession - in-memory</b></p>\n",
+       "                \n",
+       "        <div>\n",
+       "            <p><b>SparkContext</b></p>\n",
+       "\n",
+       "            <p><a href=\"http://ING-PDGE01:4040\">Spark UI</a></p>\n",
+       "\n",
+       "            <dl>\n",
+       "              <dt>Version</dt>\n",
+       "                <dd><code>v3.5.2</code></dd>\n",
+       "              <dt>Master</dt>\n",
+       "                <dd><code>spark://10.43.103.125:7077</code></dd>\n",
+       "              <dt>AppName</dt>\n",
+       "                <dd><code>PrimerSparkGonzalez</code></dd>\n",
+       "            </dl>\n",
+       "        </div>\n",
+       "        \n",
+       "            </div>\n",
+       "        "
+      ],
+      "text/plain": [
+       "<pyspark.sql.session.SparkSession at 0x7fa94da22120>"
+      ]
+     },
+     "execution_count": 2,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "SPARK_MASTER_URL = os.getenv(\"SPARK_MASTER_URL\", \"spark://10.43.103.125:7077\")\n",
+    "configura = SparkConf()\n",
+    "configura.setMaster(SPARK_MASTER_URL)\n",
+    "configura.set('spark.local.dir', '/almacen')\n",
+    "configura.setAppName(\"PrimerSparkGonzalez\")\n",
+    "spark = SparkSession.builder.config(conf=configura).getOrCreate()\n",
+    "SQLContext(sparkContext=spark.sparkContext, sparkSession=spark)\n",
+    "# spark = spark.sparkContext\n",
+    "\n",
+    "### Revisar si El servicio esta vivo\n",
+    "spark"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "e9a54d90-eaad-4709-b4cd-f10e01d8e710",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "24/11/11 15:29:39 WARN SparkSession: Using an existing Spark session; only runtime SQL configurations will take effect.\n",
+      "                                                                                \r"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- NoACCESOSFIJOSAINTERNET: integer (nullable = true)\n",
+      " |-- INDICE: string (nullable = true)\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      "\n",
+      "+-----------------------+------+-------------+\n",
+      "|NoACCESOSFIJOSAINTERNET|INDICE|COD_MUNICIPIO|\n",
+      "+-----------------------+------+-------------+\n",
+      "|                 772844| 29,78|         5001|\n",
+      "|                   1103|  5,18|         5002|\n",
+      "|                    151|  5,32|         5004|\n",
+      "|                    102|  2,08|         5021|\n",
+      "|                   3608| 11,23|         5030|\n",
+      "+-----------------------+------+-------------+\n",
+      "only showing top 5 rows\n",
+      "\n",
+      "+-----------------+---------------------+--------------------+-------------------------+----------------------+----------------+---------------------+------------------+----------------+---------------------+------------------------+-----------------------------+--------------------------+-----------+-----------+----------------+---------------------+-----------------+----------------+------------------+-------------+\n",
+      "|ESTU_MCPIO_RESIDE|ESTU_COD_RESIDE_MCPIO|PUNT_LECTURA_CRITICA|PERCENTIL_LECTURA_CRITICA|DESEMP_LECTURA_CRITICA|PUNT_MATEMATICAS|PERCENTIL_MATEMATICAS|DESEMP_MATEMATICAS|PUNT_C_NATURALES|PERCENTIL_C_NATURALES|PUNT_SOCIALES_CIUDADANAS|PERCENTIL_SOCIALES_CIUDADANAS|DESEMP_SOCIALES_CIUDADANAS|PUNT_INGLES|PUNT_GLOBAL|PERCENTIL_GLOBAL|ESTU_COD_RESIDE_DEPTO|ESTU_DEPTO_RESIDE|PERCENTIL_INGLES|DESEMP_C_NATURALES|DESEMP_INGLES|\n",
+      "+-----------------+---------------------+--------------------+-------------------------+----------------------+----------------+---------------------+------------------+----------------+---------------------+------------------------+-----------------------------+--------------------------+-----------+-----------+----------------+---------------------+-----------------+----------------+------------------+-------------+\n",
+      "|           CAJICÁ|                25126|                  54|                       57|                     3|              65|                   89|                 3|              41|                   29|                      33|                           11|                         1|       55.0|        244|              49|                   25|     CUNDINAMARCA|              81|                 2|           A1|\n",
+      "|           CAJICÁ|                25126|                  57|                       67|                     3|              43|                   26|                 2|              46|                   45|                      49|                           55|                         2|       33.0|        238|              44|                   25|     CUNDINAMARCA|               6|                 2|           A-|\n",
+      "|           CAJICÁ|                25126|                  59|                       73|                     3|              72|                   97|                 4|              63|                   92|                      68|                           95|                         3|       59.0|        325|              94|                   25|     CUNDINAMARCA|              87|                 3|           A2|\n",
+      "|           CAJICÁ|                25126|                  47|                       32|                     2|              55|                   64|                 3|              46|                   43|                      43|                           38|                         2|       47.0|        238|              45|                   25|     CUNDINAMARCA|              58|                 2|           A-|\n",
+      "|           CAJICÁ|                25126|                  37|                        8|                     2|              48|                   42|                 2|              44|                   38|                      32|                            7|                         1|       43.0|        202|              19|                   25|     CUNDINAMARCA|              40|                 2|           A-|\n",
+      "+-----------------+---------------------+--------------------+-------------------------+----------------------+----------------+---------------------+------------------+----------------+---------------------+------------------------+-----------------------------+--------------------------+-----------+-----------+----------------+---------------------+-----------------+----------------+------------------+-------------+\n",
+      "only showing top 5 rows\n",
+      "\n",
+      "+----------------+----------+-------------------+------------+---------+--------------------+------------------+--------------------+---------------+----------+---------------------------+--------------+-----------------------+\n",
+      "|CÓDIGO_MUNICIPIO| MUNICIPIO|CÓDIGO_DEPARTAMENTO|DEPARTAMENTO|DESERCIÓN|DESERCIÓN_TRANSICIÓN|DESERCIÓN_PRIMARIA|DESERCIÓN_SECUNDARIA|DESERCIÓN_MEDIA|APROBACIÓN|SEDES_CONECTADAS_A_INTERNET|COBERTURA_NETA|TASA_MATRICULACIÓN_5_16|\n",
+      "+----------------+----------+-------------------+------------+---------+--------------------+------------------+--------------------+---------------+----------+---------------------------+--------------+-----------------------+\n",
+      "|            5001|  Medellín|                  5|   Antioquia|     3.46|                3.05|              2.71|                4.68|            2.8|     85.31|                      98.33|        101.16|                  101.3|\n",
+      "|            5002| Abejorral|                  5|   Antioquia|     3.79|                5.13|              2.95|                4.81|           4.14|     89.32|                       12.5|         79.75|                   79.8|\n",
+      "|            5004|  Abriaquí|                  5|   Antioquia|     3.83|                3.03|              3.74|                5.08|           1.85|     93.11|                      27.27|         95.76|                   95.8|\n",
+      "|            5021|Alejandría|                  5|   Antioquia|     3.37|                1.61|              1.72|                7.98|            2.0|     92.95|                      14.29|        104.59|                  104.6|\n",
+      "|            5030|     Amagá|                  5|   Antioquia|     6.02|                3.74|              2.83|                9.98|           6.34|     83.76|                      66.67|         65.44|                   65.4|\n",
+      "+----------------+----------+-------------------+------------+---------+--------------------+------------------+--------------------+---------------+----------+---------------------------+--------------+-----------------------+\n",
+      "only showing top 5 rows\n",
+      "\n",
+      "+-------+------+\n",
+      "|codmpio| idmc |\n",
+      "+-------+------+\n",
+      "|  52696|    30|\n",
+      "|  52427|    31|\n",
+      "|  13458|    31|\n",
+      "|  52490|    32|\n",
+      "|  27025|    32|\n",
+      "+-------+------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql import SparkSession\n",
+    "from pyspark import SparkFiles\n",
+    "\n",
+    "# Iniciar la sesión de Spark\n",
+    "spark = SparkSession.builder.appName(\"AnalisisCorrelacionDatos\").getOrCreate()\n",
+    "\n",
+    "# URLs para cada archivo proporcionado\n",
+    "urls = {\n",
+    "    \"AccesoAInternet\": \"https://raw.githubusercontent.com/Kahsma/Proyecto_PDGE/refs/heads/main/Datos%20Limpios/AccesoAInternet_LIMPIO.csv\",\n",
+    "    \"ICFES\": \"https://raw.githubusercontent.com/Kahsma/Proyecto_PDGE/refs/heads/main/Datos%20Limpios/ICFES_LIMPIO.csv\",\n",
+    "    \"NivelEducativo\": \"https://raw.githubusercontent.com/Kahsma/Proyecto_PDGE/refs/heads/main/Datos%20Limpios/NivelEducativo_LIMPIO.csv\",\n",
+    "    \"Perfilsocioeco\": \"https://raw.githubusercontent.com/Kahsma/Proyecto_PDGE/refs/heads/main/Datos%20Limpios/Perfilsocioeco_LIMPIO.csv\"\n",
+    "}\n",
+    "\n",
+    "# Añadir archivos al contexto de Spark\n",
+    "for name, url in urls.items():\n",
+    "    spark.sparkContext.addFile(url)\n",
+    "\n",
+    "# Leer los archivos en DataFrames con los esquemas definidos\n",
+    "acceso_internet_df = spark.read.csv(\"file://\"+SparkFiles.get(\"AccesoAInternet_LIMPIO.csv\"), header=True, inferSchema=True)\n",
+    "icfes_df = spark.read.csv(\"file://\"+SparkFiles.get(\"ICFES_LIMPIO.csv\"), header=True, inferSchema=True)\n",
+    "nivel_educativo_df = spark.read.csv(\"file://\"+SparkFiles.get(\"NivelEducativo_LIMPIO.csv\"), header=True, inferSchema=True)\n",
+    "perfilsocioeco_df = spark.read.csv(\"file://\"+SparkFiles.get(\"Perfilsocioeco_LIMPIO.csv\"), header=True, inferSchema=True)\n",
+    "from pyspark.sql.types import DoubleType\n",
+    "# Delete the AÑO column from nivel_educativo_df\n",
+    "nivel_educativo_df = nivel_educativo_df.drop(\"AÑO\")\n",
+    "# Mostrar esquema actualizado para verificar\n",
+    "acceso_internet_df.printSchema()\n",
+    "# Mostrar las primeras filas de cada DataFrame para verificar la carga correcta\n",
+    "acceso_internet_df.show(5)\n",
+    "icfes_df.show(5)\n",
+    "nivel_educativo_df.show(5)\n",
+    "perfilsocioeco_df.show(5)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "9d9f5213-a6ab-4111-81f7-36eaf82e3b70",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Columnas en el DataFrame AccesoAInternet:\n",
+      "['NoACCESOSFIJOSAINTERNET', 'INDICE', 'COD_MUNICIPIO']\n",
+      "\n",
+      "Columnas en el DataFrame ICFES:\n",
+      "['ESTU_MCPIO_RESIDE', 'ESTU_COD_RESIDE_MCPIO', 'PUNT_LECTURA_CRITICA', 'PERCENTIL_LECTURA_CRITICA', 'DESEMP_LECTURA_CRITICA', 'PUNT_MATEMATICAS', 'PERCENTIL_MATEMATICAS', 'DESEMP_MATEMATICAS', 'PUNT_C_NATURALES', 'PERCENTIL_C_NATURALES', 'PUNT_SOCIALES_CIUDADANAS', 'PERCENTIL_SOCIALES_CIUDADANAS', 'DESEMP_SOCIALES_CIUDADANAS', 'PUNT_INGLES', 'PUNT_GLOBAL', 'PERCENTIL_GLOBAL', 'ESTU_COD_RESIDE_DEPTO', 'ESTU_DEPTO_RESIDE', 'PERCENTIL_INGLES', 'DESEMP_C_NATURALES', 'DESEMP_INGLES']\n",
+      "\n",
+      "Columnas en el DataFrame NivelEducativo:\n",
+      "['CÓDIGO_MUNICIPIO', 'MUNICIPIO', 'CÓDIGO_DEPARTAMENTO', 'DEPARTAMENTO', 'DESERCIÓN', 'DESERCIÓN_TRANSICIÓN', 'DESERCIÓN_PRIMARIA', 'DESERCIÓN_SECUNDARIA', 'DESERCIÓN_MEDIA', 'APROBACIÓN', 'SEDES_CONECTADAS_A_INTERNET', 'COBERTURA_NETA', 'TASA_MATRICULACIÓN_5_16']\n",
+      "\n",
+      "Columnas en el DataFrame PerfilSocioeco:\n",
+      "['codmpio', ' idmc ']\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Mostrar todas las columnas en cada DataFrame\n",
+    "print(\"Columnas en el DataFrame AccesoAInternet:\")\n",
+    "print(acceso_internet_df.columns)\n",
+    "\n",
+    "print(\"\\nColumnas en el DataFrame ICFES:\")\n",
+    "print(icfes_df.columns)\n",
+    "\n",
+    "print(\"\\nColumnas en el DataFrame NivelEducativo:\")\n",
+    "print(nivel_educativo_df.columns)\n",
+    "\n",
+    "print(\"\\nColumnas en el DataFrame PerfilSocioeco:\")\n",
+    "print(perfilsocioeco_df.columns)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "c9032225-3588-415c-9334-457d3eee864d",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- NoACCESOSFIJOSAINTERNET: integer (nullable = true)\n",
+      " |-- INDICE: string (nullable = true)\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- ESTU_MCPIO_RESIDE: string (nullable = true)\n",
+      " |-- ESTU_COD_RESIDE_MCPIO: integer (nullable = true)\n",
+      " |-- PUNT_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- PERCENTIL_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- DESEMP_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- PUNT_MATEMATICAS: integer (nullable = true)\n",
+      " |-- PERCENTIL_MATEMATICAS: integer (nullable = true)\n",
+      " |-- DESEMP_MATEMATICAS: integer (nullable = true)\n",
+      " |-- PUNT_C_NATURALES: integer (nullable = true)\n",
+      " |-- PERCENTIL_C_NATURALES: integer (nullable = true)\n",
+      " |-- PUNT_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- PERCENTIL_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- DESEMP_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- PUNT_INGLES: double (nullable = true)\n",
+      " |-- PUNT_GLOBAL: integer (nullable = true)\n",
+      " |-- PERCENTIL_GLOBAL: integer (nullable = true)\n",
+      " |-- ESTU_COD_RESIDE_DEPTO: integer (nullable = true)\n",
+      " |-- ESTU_DEPTO_RESIDE: string (nullable = true)\n",
+      " |-- PERCENTIL_INGLES: integer (nullable = true)\n",
+      " |-- DESEMP_C_NATURALES: integer (nullable = true)\n",
+      " |-- DESEMP_INGLES: string (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- CÓDIGO_MUNICIPIO: integer (nullable = true)\n",
+      " |-- MUNICIPIO: string (nullable = true)\n",
+      " |-- CÓDIGO_DEPARTAMENTO: integer (nullable = true)\n",
+      " |-- DEPARTAMENTO: string (nullable = true)\n",
+      " |-- DESERCIÓN: double (nullable = true)\n",
+      " |-- DESERCIÓN_TRANSICIÓN: double (nullable = true)\n",
+      " |-- DESERCIÓN_PRIMARIA: double (nullable = true)\n",
+      " |-- DESERCIÓN_SECUNDARIA: double (nullable = true)\n",
+      " |-- DESERCIÓN_MEDIA: double (nullable = true)\n",
+      " |-- APROBACIÓN: double (nullable = true)\n",
+      " |-- SEDES_CONECTADAS_A_INTERNET: double (nullable = true)\n",
+      " |-- COBERTURA_NETA: double (nullable = true)\n",
+      " |-- TASA_MATRICULACIÓN_5_16: double (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- codmpio: integer (nullable = true)\n",
+      " |-- idmc: integer (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql.functions import col\n",
+    "\n",
+    "# Función para eliminar espacios en los nombres de columnas\n",
+    "def eliminar_espacios_nombres_columnas(df):\n",
+    "    for nombre_columna in df.columns:\n",
+    "        nuevo_nombre_columna = nombre_columna.replace(\" \", \"\")  # Eliminar todos los espacios en los nombres de columnas\n",
+    "        df = df.withColumnRenamed(nombre_columna, nuevo_nombre_columna)\n",
+    "    return df\n",
+    "\n",
+    "# Aplicar la función a cada DataFrame\n",
+    "acceso_internet_df = eliminar_espacios_nombres_columnas(acceso_internet_df)\n",
+    "icfes_df = eliminar_espacios_nombres_columnas(icfes_df)\n",
+    "nivel_educativo_df = eliminar_espacios_nombres_columnas(nivel_educativo_df)\n",
+    "perfilsocioeco_df = eliminar_espacios_nombres_columnas(perfilsocioeco_df)\n",
+    "\n",
+    "# Verificar mostrando el esquema o nombres de columnas actualizados\n",
+    "acceso_internet_df.printSchema()\n",
+    "icfes_df.printSchema()\n",
+    "nivel_educativo_df.printSchema()\n",
+    "perfilsocioeco_df.printSchema()\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "dcfe8ed9-c6a6-4942-a484-2d117b815863",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- NoACCESOSFIJOSAINTERNET: integer (nullable = true)\n",
+      " |-- INDICE: integer (nullable = true)\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      "\n",
+      "+-----------------------+------+-------------+\n",
+      "|NoACCESOSFIJOSAINTERNET|INDICE|COD_MUNICIPIO|\n",
+      "+-----------------------+------+-------------+\n",
+      "|                 772844|  2978|         5001|\n",
+      "|                   1103|   518|         5002|\n",
+      "|                    151|   532|         5004|\n",
+      "|                    102|   208|         5021|\n",
+      "|                   3608|  1123|         5030|\n",
+      "+-----------------------+------+-------------+\n",
+      "only showing top 5 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql.functions import regexp_replace, col\n",
+    "from pyspark.sql.types import IntegerType\n",
+    "\n",
+    "# Paso 1: Limpiar la columna INDICE eliminando caracteres no numéricos, si existen\n",
+    "# Por ejemplo, esto eliminará cualquier espacio o carácter no numérico\n",
+    "acceso_internet_df = acceso_internet_df.withColumn(\"INDICE\", regexp_replace(col(\"INDICE\"), \"[^0-9]\", \"\"))\n",
+    "\n",
+    "# Paso 2: Convertir INDICE a IntegerType, con una verificación para cadenas vacías\n",
+    "acceso_internet_df = acceso_internet_df.withColumn(\"INDICE\", \n",
+    "                                                   col(\"INDICE\").cast(IntegerType()))\n",
+    "\n",
+    "# Verificar la conversión mostrando el esquema y algunos datos\n",
+    "acceso_internet_df.printSchema()\n",
+    "acceso_internet_df.show(5)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "fddb7a71-ebdd-406c-b080-7aab71e732a8",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- NoACCESOSFIJOSAINTERNET: integer (nullable = true)\n",
+      " |-- INDICE: integer (nullable = true)\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- ESTU_MCPIO_RESIDE: string (nullable = true)\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      " |-- PUNT_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- PERCENTIL_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- DESEMP_LECTURA_CRITICA: integer (nullable = true)\n",
+      " |-- PUNT_MATEMATICAS: integer (nullable = true)\n",
+      " |-- PERCENTIL_MATEMATICAS: integer (nullable = true)\n",
+      " |-- DESEMP_MATEMATICAS: integer (nullable = true)\n",
+      " |-- PUNT_C_NATURALES: integer (nullable = true)\n",
+      " |-- PERCENTIL_C_NATURALES: integer (nullable = true)\n",
+      " |-- PUNT_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- PERCENTIL_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- DESEMP_SOCIALES_CIUDADANAS: integer (nullable = true)\n",
+      " |-- PUNT_INGLES: double (nullable = true)\n",
+      " |-- PUNT_GLOBAL: integer (nullable = true)\n",
+      " |-- PERCENTIL_GLOBAL: integer (nullable = true)\n",
+      " |-- ESTU_COD_RESIDE_DEPTO: integer (nullable = true)\n",
+      " |-- ESTU_DEPTO_RESIDE: string (nullable = true)\n",
+      " |-- PERCENTIL_INGLES: integer (nullable = true)\n",
+      " |-- DESEMP_C_NATURALES: integer (nullable = true)\n",
+      " |-- DESEMP_INGLES: string (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      " |-- MUNICIPIO: string (nullable = true)\n",
+      " |-- CÓDIGO_DEPARTAMENTO: integer (nullable = true)\n",
+      " |-- DEPARTAMENTO: string (nullable = true)\n",
+      " |-- DESERCIÓN: double (nullable = true)\n",
+      " |-- DESERCIÓN_TRANSICIÓN: double (nullable = true)\n",
+      " |-- DESERCIÓN_PRIMARIA: double (nullable = true)\n",
+      " |-- DESERCIÓN_SECUNDARIA: double (nullable = true)\n",
+      " |-- DESERCIÓN_MEDIA: double (nullable = true)\n",
+      " |-- APROBACIÓN: double (nullable = true)\n",
+      " |-- SEDES_CONECTADAS_A_INTERNET: double (nullable = true)\n",
+      " |-- COBERTURA_NETA: double (nullable = true)\n",
+      " |-- TASA_MATRICULACIÓN_5_16: double (nullable = true)\n",
+      "\n",
+      "root\n",
+      " |-- COD_MUNICIPIO: integer (nullable = true)\n",
+      " |-- idmc: integer (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Función para renombrar columnas específicas a COD_MUNICIPIO\n",
+    "def renombrar_columnas_cod_municipio(df):\n",
+    "    columnas_a_renombrar = {\n",
+    "        \"CÓDIGO_MUNICIPIO\": \"COD_MUNICIPIO\",\n",
+    "        \"codmpio\": \"COD_MUNICIPIO\",\n",
+    "        \"ESTU_COD_RESIDE_MCPIO\": \"COD_MUNICIPIO\"\n",
+    "    }\n",
+    "    for nombre_antiguo, nombre_nuevo in columnas_a_renombrar.items():\n",
+    "        if nombre_antiguo in df.columns:\n",
+    "            df = df.withColumnRenamed(nombre_antiguo, nombre_nuevo)\n",
+    "    return df\n",
+    "\n",
+    "# Aplicar la función de renombrado a cada DataFrame\n",
+    "acceso_internet_df = renombrar_columnas_cod_municipio(acceso_internet_df)\n",
+    "icfes_df = renombrar_columnas_cod_municipio(icfes_df)\n",
+    "nivel_educativo_df = renombrar_columnas_cod_municipio(nivel_educativo_df)\n",
+    "perfilsocioeco_df = renombrar_columnas_cod_municipio(perfilsocioeco_df)\n",
+    "\n",
+    "# Verificar mostrando el esquema actualizado\n",
+    "acceso_internet_df.printSchema()\n",
+    "icfes_df.printSchema()\n",
+    "nivel_educativo_df.printSchema()\n",
+    "perfilsocioeco_df.printSchema()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "edd55293-d378-469f-9655-b6ddf1fff176",
+   "metadata": {},
+   "source": [
+    "¿Cuál es la relación entre el acceso al servicio de internet y los resultados de las pruebas ICFES 11 en los municipios seleccionados?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "4bfb5b6e-b924-4fb9-ad83-d014001fa394",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "[Stage 14:>                                                       (0 + 10) / 10]\r"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "La correlación entre Acceso a Internet (INDICE) y Puntaje ICFES (AVG_PUNT_GLOBAL) es: 0.38121489233634626\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "                                                                                \r"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql.functions import avg\n",
+    "\n",
+    "# Paso 1: Calcular el promedio de PUNT_GLOBAL para cada COD_MUNICIPIO en icfes_df\n",
+    "icfes_avg_df = icfes_df.groupBy(\"COD_MUNICIPIO\").agg(avg(\"PUNT_GLOBAL\").alias(\"AVG_PUNT_GLOBAL\"))\n",
+    "\n",
+    "# Paso 2: Unir los datos de acceso a internet (acceso_internet_df) con los datos de puntaje promedio de ICFES en COD_MUNICIPIO\n",
+    "combined_df = acceso_internet_df.join(icfes_avg_df, \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 3: Calcular la correlación entre INDICE (Acceso a Internet) y AVG_PUNT_GLOBAL (Puntaje ICFES)\n",
+    "correlacion = combined_df.stat.corr(\"INDICE\", \"AVG_PUNT_GLOBAL\")\n",
+    "print(f\"La correlación entre Acceso a Internet (INDICE) y Puntaje ICFES (AVG_PUNT_GLOBAL) es: {correlacion}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "9dc8b71f-9431-4bfe-9628-b40c3d7831c8",
+   "metadata": {},
+   "source": [
+    "¿En qué medida el índice de desarrollo municipal (IDMC) afecta el desempeño de los estudiantes en las pruebas ICFES 11 en diferentes regiones del país?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "24ff428c-a31b-4e3f-9b78-dfb559ba4c03",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------------+----+------------------+\n",
+      "|COD_MUNICIPIO|idmc|   AVG_PUNT_GLOBAL|\n",
+      "+-------------+----+------------------+\n",
+      "|         8638|  56|223.81088082901553|\n",
+      "|        15790|  53|240.74358974358975|\n",
+      "|        50223|  59|235.98666666666668|\n",
+      "|        47268|  50| 203.4512195121951|\n",
+      "+-------------+----+------------------+\n",
+      "only showing top 4 rows\n",
+      "\n",
+      "La correlación entre el Índice de Desarrollo Municipal (idmc) y el Puntaje ICFES (AVG_PUNT_GLOBAL) es: 0.6042708922149711\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# Paso 1: Calcular el promedio de PUNT_GLOBAL para cada COD_MUNICIPIO en el DataFrame icfes_df\n",
+    "icfes_avg_df = icfes_df.groupBy(\"COD_MUNICIPIO\").agg(avg(\"PUNT_GLOBAL\").alias(\"AVG_PUNT_GLOBAL\"))\n",
+    "\n",
+    "# Paso 2: Unir los puntajes promedio con el índice de desarrollo municipal en perfilsocioeco_df usando COD_MUNICIPIO\n",
+    "# Usar una unión interna para centrarse solo en los municipios presentes en ambos DataFrames\n",
+    "joined_df = perfilsocioeco_df.join(icfes_avg_df, \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 3: Mostrar el resultado para verificar la unión\n",
+    "joined_df.show(4)\n",
+    "\n",
+    "# Paso 4: Calcular la correlación entre idmc (Índice de Desarrollo Municipal) y AVG_PUNT_GLOBAL (Puntaje ICFES)\n",
+    "correlacion = joined_df.stat.corr(\"idmc\", \"AVG_PUNT_GLOBAL\")\n",
+    "print(f\"La correlación entre el Índice de Desarrollo Municipal (idmc) y el Puntaje ICFES (AVG_PUNT_GLOBAL) es: {correlacion}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "83d15cef-214d-4f54-9b73-89852ca10983",
+   "metadata": {},
+   "source": [
+    "¿Cómo varía la tasa de deserción escolar entre los diferentes niveles educativos (transición, primaria, secundaria y media) en los municipios de cada departamento?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "f020c680-d28e-4f81-8a57-547dc6304104",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+--------------------+-------------------------+-----------------------+-------------------------+--------------------+\n",
+      "|        DEPARTAMENTO|PROM_DESERCIÓN_TRANSICIÓN|PROM_DESERCIÓN_PRIMARIA|PROM_DESERCIÓN_SECUNDARIA|PROM_DESERCIÓN_MEDIA|\n",
+      "+--------------------+-------------------------+-----------------------+-------------------------+--------------------+\n",
+      "|        Cundinamarca|        3.260260869565216|      1.799565217391303|         3.48191304347826|   2.557565217391305|\n",
+      "|           Antioquia|       3.7608800000000002|     3.4946400000000004|        6.645199999999996|   4.139039999999999|\n",
+      "|  Norte de Santander|                    2.716|     2.1999999999999997|                    4.384|               3.684|\n",
+      "|           Atlántico|       2.1230434782608696|     1.3460869565217393|                     1.56|   1.208695652173913|\n",
+      "|           Santander|        2.560804597701149|     1.3797701149425288|         3.17022988505747|  2.4703448275862057|\n",
+      "|            Casanare|        2.888947368421053|     2.0252631578947367|       3.5405263157894744|  2.7910526315789475|\n",
+      "|               Huila|       2.6962162162162153|      2.363513513513514|        5.944864864864864|   3.647297297297297|\n",
+      "|             Bolívar|        2.284565217391304|      2.044565217391304|       3.2843478260869574|  2.6036956521739127|\n",
+      "|           Magdalena|       2.9770000000000008|     2.0853333333333333|       2.3303333333333334|  1.7380000000000002|\n",
+      "|     Valle del Cauca|        4.865952380952381|     3.5502380952380954|        5.021666666666667|  3.8600000000000008|\n",
+      "|           Risaralda|        5.447142857142857|     3.8150000000000004|        6.897142857142856|                4.45|\n",
+      "|               Sucre|       3.3692307692307684|     2.1726923076923077|        3.565384615384615|  2.3661538461538463|\n",
+      "|          La Guajira|                    5.276|     3.5886666666666667|        4.285333333333333|   2.780666666666667|\n",
+      "|              Tolima|        3.317234042553191|      2.443829787234042|        4.150425531914894|  2.8553191489361707|\n",
+      "|Archipiélago de S...|                     0.42|                   1.86|                    0.925|                1.27|\n",
+      "|            Guaviare|        4.342499999999999|                 3.1625|                   3.7925|               2.795|\n",
+      "|             Vichada|                     9.61|      6.860000000000001|        9.975000000000001|              6.4775|\n",
+      "|               Cauca|        2.540714285714286|     1.6852380952380956|       4.5057142857142845|  4.0411904761904776|\n",
+      "|             Quindio|                     7.52|                  5.235|        7.469999999999999|  3.6233333333333335|\n",
+      "|                Meta|        5.108965517241379|     3.9303448275862065|        6.424827586206895|   4.066551724137931|\n",
+      "+--------------------+-------------------------+-----------------------+-------------------------+--------------------+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Agrupar solo por DEPARTAMENTO y calcular las tasas promedio de deserción para cada nivel educativo\n",
+    "tasas_desercion_por_dept_df = nivel_educativo_df.groupBy(\"DEPARTAMENTO\").agg(\n",
+    "    avg(\"DESERCIÓN_TRANSICIÓN\").alias(\"PROM_DESERCIÓN_TRANSICIÓN\"),\n",
+    "    avg(\"DESERCIÓN_PRIMARIA\").alias(\"PROM_DESERCIÓN_PRIMARIA\"),\n",
+    "    avg(\"DESERCIÓN_SECUNDARIA\").alias(\"PROM_DESERCIÓN_SECUNDARIA\"),\n",
+    "    avg(\"DESERCIÓN_MEDIA\").alias(\"PROM_DESERCIÓN_MEDIA\")\n",
+    ")\n",
+    "\n",
+    "# Mostrar los resultados agregados para entender las tasas de deserción por departamento\n",
+    "tasas_desercion_por_dept_df.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "91748920-4e39-47c6-a0ab-bc0b074642d5",
+   "metadata": {},
+   "source": [
+    "¿Qué relación existe entre la conectividad a internet de las sedes educativas y la tasa de aprobación de los estudiantes en los municipios?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "d4b71b13-13ea-485f-8b6a-17a68b0b572e",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+-------------+------------------+------------+---------------------------+\n",
+      "|COD_MUNICIPIO|  PROM_PUNT_GLOBAL|PASSING_RATE|SEDES_CONECTADAS_A_INTERNET|\n",
+      "+-------------+------------------+------------+---------------------------+\n",
+      "|         8638|223.81088082901553|           0|                      100.0|\n",
+      "|        15790|240.74358974358975|           0|                      26.32|\n",
+      "|        50223|235.98666666666668|           0|                      71.43|\n",
+      "|        47268| 203.4512195121951|           0|                       70.0|\n",
+      "+-------------+------------------+------------+---------------------------+\n",
+      "only showing top 4 rows\n",
+      "\n",
+      "La correlación entre la conectividad de las sedes educativas (SEDES_CONECTADAS_A_INTERNET) y la tasa de aprobación (PROM_PUNT_GLOBAL > 250) es: 0.056277290459159135\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql.functions import avg, col, when\n",
+    "\n",
+    "# Paso 1: Calcular el promedio de PUNT_GLOBAL para cada COD_MUNICIPIO\n",
+    "icfes_avg_df = icfes_df.groupBy(\"COD_MUNICIPIO\").agg(avg(\"PUNT_GLOBAL\").alias(\"PROM_PUNT_GLOBAL\"))\n",
+    "\n",
+    "# Paso 2: Crear una columna \"PASSING_RATE\" donde los municipios con PROM_PUNT_GLOBAL > 250 se marcan como 1, de lo contrario 0\n",
+    "icfes_avg_df = icfes_avg_df.withColumn(\"PASSING_RATE\", when(col(\"PROM_PUNT_GLOBAL\") > 250, 1).otherwise(0))\n",
+    "\n",
+    "# Paso 3: Unir con nivel_educativo_df para incluir información de SEDES_CONECTADAS_A_INTERNET\n",
+    "joined_df = icfes_avg_df.join(nivel_educativo_df.select(\"COD_MUNICIPIO\", \"SEDES_CONECTADAS_A_INTERNET\"), \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 4: Mostrar el DataFrame unido para verificar los resultados\n",
+    "joined_df.show(4)\n",
+    "\n",
+    "# Paso 5: Calcular la correlación entre SEDES_CONECTADAS_A_INTERNET y PASSING_RATE\n",
+    "correlacion = joined_df.stat.corr(\"SEDES_CONECTADAS_A_INTERNET\", \"PASSING_RATE\")\n",
+    "print(f\"La correlación entre la conectividad de las sedes educativas (SEDES_CONECTADAS_A_INTERNET) y la tasa de aprobación (PROM_PUNT_GLOBAL > 250) es: {correlacion}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4e49a48e-e4b0-4326-8f07-beeb53908617",
+   "metadata": {},
+   "source": [
+    "¿Se relaciona el índice de desarrollo municipal (idmc) con el índice de deserción escolar?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "3d9c0a63-ed05-4172-b0ab-6f428e465e57",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en General: 0.007080790797333255\n",
+      "Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Transición: 0.08624890442681908\n",
+      "Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Primaria: -0.014495186114580554\n",
+      "Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Secundaria: -0.008925241910767287\n",
+      "Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Media: -0.1126906591912708\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# Paso 1: Unir los DataFrames en COD_MUNICIPIO para combinar idmc con las tasas de deserción\n",
+    "df_combinado = perfilsocioeco_df.join(nivel_educativo_df, \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 2: Calcular las correlaciones entre idmc y cada tasa de deserción\n",
+    "correlacion_transicion = df_combinado.stat.corr(\"idmc\", \"DESERCIÓN_TRANSICIÓN\")\n",
+    "correlacion_primaria = df_combinado.stat.corr(\"idmc\", \"DESERCIÓN_PRIMARIA\")\n",
+    "correlacion_secundaria = df_combinado.stat.corr(\"idmc\", \"DESERCIÓN_SECUNDARIA\")\n",
+    "correlacion_media = df_combinado.stat.corr(\"idmc\", \"DESERCIÓN_MEDIA\")\n",
+    "correlacion_general = df_combinado.stat.corr(\"idmc\", \"DESERCIÓN\")\n",
+    "\n",
+    "# Paso 3: Mostrar los resultados de las correlaciones\n",
+    "print(f\"Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en General: {correlacion_general}\")\n",
+    "print(f\"Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Transición: {correlacion_transicion}\")\n",
+    "print(f\"Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Primaria: {correlacion_primaria}\")\n",
+    "print(f\"Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Secundaria: {correlacion_secundaria}\")\n",
+    "print(f\"Correlación entre el Índice de Desarrollo Municipal (idmc) y la Tasa de Deserción en Media: {correlacion_media}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2622bc1d-517d-4991-8396-ee642964d306",
+   "metadata": {},
+   "source": [
+    "¿Cómo varían el índice de aprobación académica y el desempeño en el examen saber 11 con respecto al índice de acceso a internet en zonas rurales?"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "dce4cd54-a1b5-41bf-8c25-4a81a3b344db",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Correlación entre la tasa de acceso a internet (INDICE) y la tasa de aprobación académica (APROBACIÓN): -0.08873728293678942\n",
+      "Correlación entre la tasa de acceso a internet (INDICE) y el rendimiento en Saber 11 (PROM_PUNT_GLOBAL): 0.37537315932613646\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# Paso 1: Calcular el promedio de PUNT_GLOBAL para cada COD_MUNICIPIO en icfes_df\n",
+    "icfes_avg_df = icfes_df.groupBy(\"COD_MUNICIPIO\").agg(avg(\"PUNT_GLOBAL\").alias(\"PROM_PUNT_GLOBAL\"))\n",
+    "\n",
+    "# Paso 2: Unir acceso_internet_df con nivel_educativo_df para obtener INDICE y APROBACIÓN para cada municipio\n",
+    "# Suponiendo que nivel_educativo_df tiene la información de APROBACIÓN\n",
+    "municipios_df = acceso_internet_df.join(nivel_educativo_df.select(\"COD_MUNICIPIO\", \"APROBACIÓN\"), \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 3: Unir el DataFrame resultante con los datos de promedio PUNT_GLOBAL\n",
+    "df_combinado = municipios_df.join(icfes_avg_df, \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 4: Calcular las correlaciones entre INDICE y APROBACIÓN, y entre INDICE y PROM_PUNT_GLOBAL\n",
+    "correlacion_indice_aprobacion = df_combinado.stat.corr(\"INDICE\", \"APROBACIÓN\")\n",
+    "correlacion_indice_punt_global = df_combinado.stat.corr(\"INDICE\", \"PROM_PUNT_GLOBAL\")\n",
+    "\n",
+    "# Paso 5: Mostrar los resultados de las correlaciones\n",
+    "print(f\"Correlación entre la tasa de acceso a internet (INDICE) y la tasa de aprobación académica (APROBACIÓN): {correlacion_indice_aprobacion}\")\n",
+    "print(f\"Correlación entre la tasa de acceso a internet (INDICE) y el rendimiento en Saber 11 (PROM_PUNT_GLOBAL): {correlacion_indice_punt_global}\")\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "59f77e3b-2b60-4f0c-b6b3-0134445e6e72",
+   "metadata": {},
+   "source": [
+    "¿Cómo varían los resultados del ICFES en municipios con diferentes niveles de educación promedio?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "612c8980-b7f2-4685-bd2d-8031f8cebb38",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+---------------+----------------------+\n",
+      "|Nivel_Educativo|Promedio_Puntaje_ICFES|\n",
+      "+---------------+----------------------+\n",
+      "|          Medio|     234.9243901722825|\n",
+      "|           Alto|    235.53071741625536|\n",
+      "|           Bajo|    190.74350649350652|\n",
+      "+---------------+----------------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "\n",
+    "# Paso 1: Calcular el promedio de PUNT_GLOBAL para cada COD_MUNICIPIO\n",
+    "icfes_avg_df = icfes_df.groupBy(\"COD_MUNICIPIO\").agg(avg(\"PUNT_GLOBAL\").alias(\"PROM_PUNT_GLOBAL\"))\n",
+    "\n",
+    "# Paso 2: Unir icfes_avg_df con nivel_educativo_df para traer APROBACIÓN y PROM_PUNT_GLOBAL juntos\n",
+    "df_combinado = icfes_avg_df.join(nivel_educativo_df.select(\"COD_MUNICIPIO\", \"APROBACIÓN\"), \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 3: Clasificar los municipios en categorías según APROBACIÓN\n",
+    "# Ejemplo de umbrales: APROBACIÓN < 80 es bajo, entre 80 y 90 es medio, y >90 es alto\n",
+    "df_combinado = df_combinado.withColumn(\n",
+    "    \"Nivel_Educativo\",\n",
+    "    when(col(\"APROBACIÓN\") < 75, \"Bajo\")\n",
+    "    .when((col(\"APROBACIÓN\") >= 75) & (col(\"APROBACIÓN\") <= 85), \"Medio\")\n",
+    "    .otherwise(\"Alto\")\n",
+    ")\n",
+    "\n",
+    "# Paso 4: Calcular el puntaje promedio de ICFES para cada categoría de nivel educativo\n",
+    "nivel_educativo_icfes_df = df_combinado.groupBy(\"Nivel_Educativo\").agg(avg(\"PROM_PUNT_GLOBAL\").alias(\"Promedio_Puntaje_ICFES\"))\n",
+    "\n",
+    "# Paso 5: Mostrar los resultados\n",
+    "nivel_educativo_icfes_df.show()\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "c7c02c0d-08fa-4093-a9b3-a57d4823a569",
+   "metadata": {},
+   "source": [
+    "¿Qué proporción de estudiantes en municipios con bajos índices de desarrollo alcanzan niveles de competencia altos en las pruebas ICFES?\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "id": "a422d510-ed34-441a-b00c-16086225acb6",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Proporción de estudiantes con alta competencia (PUNT_GLOBAL > 240) en municipios con idmc en el percentil más bajo del 25%: 26.11%\n"
+     ]
+    }
+   ],
+   "source": [
+    "from pyspark.sql.functions import when, approx_percentile\n",
+    "\n",
+    "# Paso 1: Calcular el percentil 25 (0.25 cuantil) de idmc en el DataFrame perfilsocioeco_df\n",
+    "idmc_25_percentil = perfilsocioeco_df.select(approx_percentile(\"idmc\", 0.25).alias(\"idmc_25_percentil\")).collect()[0][\"idmc_25_percentil\"]\n",
+    "\n",
+    "# Paso 2: Filtrar municipios con idmc <= percentil 25\n",
+    "municipios_bajo_desarrollo_df = perfilsocioeco_df.filter(col(\"idmc\") <= idmc_25_percentil).select(\"COD_MUNICIPIO\")\n",
+    "\n",
+    "# Paso 3: Filtrar icfes_df para estudiantes en municipios con bajo idmc\n",
+    "icfes_bajo_desarrollo_df = icfes_df.join(municipios_bajo_desarrollo_df, \"COD_MUNICIPIO\", \"inner\")\n",
+    "\n",
+    "# Paso 4: Contar el total de estudiantes y estudiantes con PUNT_GLOBAL > 240 en estos municipios con bajo idmc\n",
+    "total_estudiantes = icfes_bajo_desarrollo_df.count()\n",
+    "estudiantes_proficientes = icfes_bajo_desarrollo_df.filter(col(\"PUNT_GLOBAL\") > 240).count()\n",
+    "\n",
+    "# Paso 5: Calcular la proporción de estudiantes con alta competencia\n",
+    "proporcion_proficientes = (estudiantes_proficientes / total_estudiantes) * 100 if total_estudiantes > 0 else 0\n",
+    "\n",
+    "# Mostrar el resultado\n",
+    "print(f\"Proporción de estudiantes con alta competencia (PUNT_GLOBAL > 240) en municipios con idmc en el percentil más bajo del 25%: {proporcion_proficientes:.2f}%\")\n"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3 (ipykernel)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
